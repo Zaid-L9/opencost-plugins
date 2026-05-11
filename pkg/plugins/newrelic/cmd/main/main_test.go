@@ -157,6 +157,37 @@ func TestGetNewRelicConfigRequiresAtLeastOnePositiveUnitPrice(t *testing.T) {
 	}
 }
 
+func TestGetNewRelicConfigAcceptsCustomUsageQueries(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "newrelic-config.json")
+	if err := os.WriteFile(configPath, []byte(`{
+		"new_relic_api_key": "test-key",
+		"account_id": 123,
+		"custom_usage_queries": [
+			{
+				"name": "cloud",
+				"nrql": "FROM NrConsumption SELECT sum(consumption) AS 'usageQuantity' WHERE metric = 'Cloud' FACET productLine LIMIT MAX",
+				"unit_price": 0.42,
+				"usage_unit": "units",
+				"resource_type": "Cloud Usage",
+				"facet_key": "productLine"
+			}
+		]
+	}`), 0600); err != nil {
+		t.Fatalf("writing config: %v", err)
+	}
+
+	config, err := getNewRelicConfig(configPath)
+	if err != nil {
+		t.Fatalf("expected custom usage query config to pass validation, got %v", err)
+	}
+	if len(config.CustomUsageQueries) != 1 {
+		t.Fatalf("expected one custom usage query, got %d", len(config.CustomUsageQueries))
+	}
+	if config.CustomUsageQueries[0].Name != "cloud" || config.CustomUsageQueries[0].UnitPrice != 0.42 {
+		t.Fatalf("unexpected custom usage query config: %#v", config.CustomUsageQueries[0])
+	}
+}
+
 func TestUsageQueriesIncludeConfiguredPrices(t *testing.T) {
 	source := NewRelicCostSource{config: &newrelicplugin.NewRelicConfig{
 		DataIngestPriceGB:       0.30,
@@ -172,5 +203,38 @@ func TestUsageQueriesIncludeConfiguredPrices(t *testing.T) {
 	}
 	if queries[0].name != "data-ingest" || queries[1].name != "core-ccu" || queries[2].name != "synthetics" {
 		t.Fatalf("unexpected query order: %#v", queries)
+	}
+}
+
+func TestUsageQueriesIncludeCustomNRQL(t *testing.T) {
+	source := NewRelicCostSource{config: &newrelicplugin.NewRelicConfig{
+		CustomUsageQueries: []newrelicplugin.NewRelicCustomUsageQuery{
+			{
+				Name:         "cloud",
+				NRQL:         "FROM NrConsumption SELECT sum(consumption) AS 'usageQuantity' SINCE '{{start}}' UNTIL '{{end}}' FACET productLine LIMIT MAX",
+				UnitPrice:    0.42,
+				UsageUnit:    "units",
+				ResourceType: "Cloud Usage",
+				FacetKey:     "productLine",
+			},
+		},
+	}}
+	start := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
+	end := start.Add(24 * time.Hour)
+
+	queries := source.usageQueries(start, end)
+	if len(queries) != 1 {
+		t.Fatalf("expected one custom usage query, got %d", len(queries))
+	}
+
+	query := queries[0]
+	if query.name != "cloud" {
+		t.Fatalf("unexpected query name: %s", query.name)
+	}
+	if !strings.Contains(query.nrql, "SINCE '2026-05-01 00:00:00 UTC'") || !strings.Contains(query.nrql, "UNTIL '2026-05-02 00:00:00 UTC'") {
+		t.Fatalf("expected rendered custom query window, got %s", query.nrql)
+	}
+	if query.price != 0.42 || query.usageUnit != "units" || query.resourceType != "Cloud Usage" || query.facetKey != "productLine" {
+		t.Fatalf("unexpected custom query mapping: %#v", query)
 	}
 }

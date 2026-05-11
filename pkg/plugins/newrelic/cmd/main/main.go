@@ -177,6 +177,28 @@ func (n *NewRelicCostSource) usageQueries(start, end time.Time) []newRelicUsageQ
 			facetKey:     "syntheticsTypeLabel",
 		})
 	}
+	for _, customQuery := range n.config.CustomUsageQueries {
+		resourceType := customQuery.ResourceType
+		if resourceType == "" {
+			resourceType = customQuery.Name
+		}
+		usageUnit := customQuery.UsageUnit
+		if usageUnit == "" {
+			usageUnit = "units"
+		}
+		facetKey := customQuery.FacetKey
+		if facetKey == "" {
+			facetKey = "facet"
+		}
+		queries = append(queries, newRelicUsageQuery{
+			name:         customQuery.Name,
+			nrql:         renderCustomNRQL(customQuery.NRQL, start, end),
+			price:        customQuery.UnitPrice,
+			usageUnit:    usageUnit,
+			resourceType: resourceType,
+			facetKey:     facetKey,
+		})
+	}
 
 	return queries
 }
@@ -247,6 +269,13 @@ func buildSyntheticsNRQL(start, end time.Time) string {
 		start.UTC().Format(newRelicDateFormat),
 		end.UTC().Format(newRelicDateFormat),
 	)
+}
+
+func renderCustomNRQL(nrql string, start, end time.Time) string {
+	return strings.NewReplacer(
+		"{{start}}", start.UTC().Format(newRelicDateFormat),
+		"{{end}}", end.UTC().Format(newRelicDateFormat),
+	).Replace(nrql)
 }
 
 func customCostsFromUsageResults(results []map[string]any, start, end time.Time, accountID int, usageQuery newRelicUsageQuery) []*pb.CustomCost {
@@ -371,7 +400,18 @@ func getNewRelicConfig(configFilePath string) (*newrelicplugin.NewRelicConfig, e
 	if result.DataIngestPriceGB < 0 || result.CoreCCUPrice < 0 || result.AdvancedCCUPrice < 0 || result.SyntheticsPricePerCheck < 0 {
 		return nil, fmt.Errorf("New Relic unit prices must be greater than or equal to 0")
 	}
-	if result.DataIngestPriceGB == 0 && result.CoreCCUPrice == 0 && result.AdvancedCCUPrice == 0 && result.SyntheticsPricePerCheck == 0 {
+	for index, query := range result.CustomUsageQueries {
+		if strings.TrimSpace(query.Name) == "" {
+			return nil, fmt.Errorf("custom_usage_queries[%d].name is required", index)
+		}
+		if strings.TrimSpace(query.NRQL) == "" {
+			return nil, fmt.Errorf("custom_usage_queries[%d].nrql is required", index)
+		}
+		if query.UnitPrice <= 0 {
+			return nil, fmt.Errorf("custom_usage_queries[%d].unit_price must be greater than 0", index)
+		}
+	}
+	if result.DataIngestPriceGB == 0 && result.CoreCCUPrice == 0 && result.AdvancedCCUPrice == 0 && result.SyntheticsPricePerCheck == 0 && len(result.CustomUsageQueries) == 0 {
 		return nil, fmt.Errorf("at least one New Relic unit price must be greater than 0")
 	}
 	if result.LogLevel == "" {

@@ -19,6 +19,16 @@ apply when converting usage into costs.
   "core_ccu_price": 0.05,
   "advanced_ccu_price": 0.10,
   "synthetics_price_per_check": 0.001,
+  "custom_usage_queries": [
+    {
+      "name": "cloud",
+      "nrql": "FROM NrConsumption SELECT sum(consumption) AS 'usageQuantity' SINCE '{{start}}' UNTIL '{{end}}' FACET productLine LIMIT MAX",
+      "unit_price": 0.42,
+      "usage_unit": "units",
+      "resource_type": "Cloud Usage",
+      "facet_key": "productLine"
+    }
+  ],
   "log_level": "info"
 }
 ```
@@ -26,6 +36,12 @@ apply when converting usage into costs.
 For EU accounts, set `"region": "eu"`. To override the NerdGraph endpoint
 directly, set `nerdgraph_api_url`. At least one unit price must be greater than
 zero. Any unit price left as `0` is skipped.
+
+Use `custom_usage_queries` for plan-specific New Relic usage lines that are not
+covered by the defaults. Each custom query must return a numeric
+`usageQuantity`; the plugin multiplies it by `unit_price`. The optional
+`{{start}}` and `{{end}}` placeholders render as the current OpenCost request
+window in New Relic's NRQL date format.
 
 ## Data Source
 
